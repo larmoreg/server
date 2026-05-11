@@ -211,6 +211,15 @@ TRITONSERVER_Error* DecodeBase64(
     const char* input, size_t input_len, std::vector<char>& decoded_data,
     size_t& decoded_size, const std::string& name);
 
+/// Encodes binary data to a Base64 encoded string.
+///
+/// \param input The raw binary data to encode.
+/// \param input_len The length of the input data.
+/// \param encoded_data A string to store the Base64 encoded result.
+/// \return The error status.
+TRITONSERVER_Error* EncodeBase64(
+    const char* input, size_t input_len, std::string& encoded_data);
+
 
 /// Validate shared memory key
 ///

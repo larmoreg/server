@@ -384,6 +384,51 @@ class HTTPAPIServer : public HTTPServer {
     evhtp_res response_code_{EVHTP_RES_OK};
   };
 
+  // KServe V1 protocol request class — translates V1 (instances/predictions)
+  // format to/from Triton's native V2 typed tensor format.
+  class V1InferRequestClass : public InferRequestClass {
+   public:
+    explicit V1InferRequestClass(
+        TRITONSERVER_Server* server, evhtp_request_t* req,
+        DataCompressor::Type response_compression_type,
+        const std::shared_ptr<TRITONSERVER_InferenceRequest>& triton_request,
+        const std::shared_ptr<SharedMemoryManager>& shm_manager,
+        const size_t max_input_size)
+        : InferRequestClass(
+              server, req, response_compression_type, triton_request,
+              shm_manager),
+          max_input_size_(max_input_size)
+    {
+    }
+
+    TRITONSERVER_Error* FinalizeResponse(
+        TRITONSERVER_InferenceResponse* response) override;
+
+    void SetResponseHeader(
+        const bool has_binary_data, const size_t header_length) override;
+
+    static void InferResponseComplete(
+        TRITONSERVER_InferenceResponse* response, const uint32_t flags,
+        void* userp);
+
+    // Map a V1 instance field to a Triton input tensor, following the
+    // ExactMappingInput pattern from GenerateRequestClass.
+    TRITONSERVER_Error* MapInstanceField(
+        const std::string& name,
+        triton::common::TritonJson::Value& instance,
+        std::map<std::string, triton::common::TritonJson::Value>&
+            input_metadata,
+        size_t& consumed_input_byte_size);
+
+    // Set the batch size (number of V1 instances) for response splitting
+    void SetBatchSize(size_t n) { batch_size_ = n; }
+    size_t GetBatchSize() const { return batch_size_; }
+
+   private:
+    const size_t max_input_size_{0};
+    size_t batch_size_{1};
+  };
+
   class GenerateRequestClass : public InferRequestClass {
    public:
     explicit GenerateRequestClass(
@@ -609,6 +654,18 @@ class HTTPAPIServer : public HTTPServer {
   void HandleTrace(evhtp_request_t* req, const std::string& model_name = "");
   void HandleLogging(evhtp_request_t* req);
 
+  // KServe V1 protocol
+  void HandleV1Infer(
+      evhtp_request_t* req, const std::string& model_name,
+      const std::string& model_version_str);
+  void HandleV1ModelReady(
+      evhtp_request_t* req, const std::string& model_name,
+      const std::string& model_version_str);
+  void HandleV1ListModels(evhtp_request_t* req);
+  void HandleV1ModelMetadata(
+      evhtp_request_t* req, const std::string& model_name,
+      const std::string& model_version_str);
+
   // Text Generation / LLM format
   //'streaming' selects the schema pair to convert request / response.
   // 'streaming' also controls the response convention, if true,
@@ -702,6 +759,7 @@ class HTTPAPIServer : public HTTPServer {
   re2::RE2 systemsharedmemory_regex_;
   re2::RE2 cudasharedmemory_regex_;
   re2::RE2 trace_regex_;
+  re2::RE2 v1_model_regex_;
 
   // [DLIS-5551] currently always performs basic conversion, only maps schema
   // of EXACT_MAPPING kind. MAPPING_SCHEMA and upcoming kinds are for

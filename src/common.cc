@@ -35,6 +35,7 @@
 
 extern "C" {
 #include <b64/cdecode.h>
+#include <b64/cencode.h>
 }
 
 namespace triton { namespace server {
@@ -159,6 +160,40 @@ DecodeBase64(
 
   decoded_size =
       base64_decode_block(input, input_len, decoded_data.data(), &state);
+
+  return nullptr;
+}
+
+TRITONSERVER_Error*
+EncodeBase64(
+    const char* input, size_t input_len, std::string& encoded_data)
+{
+  if (input_len > static_cast<size_t>(INT_MAX)) {
+    return TRITONSERVER_ErrorNew(
+        TRITONSERVER_ERROR_INVALID_ARG,
+        "input data exceeds the maximum allowed data size limit INT_MAX");
+  }
+
+  // Base64 output is ceil(input_len/3)*4 chars. libb64 inserts a newline
+  // every 72 OUTPUT chars, so newline count is based on output size.
+  size_t base64_chars = ((input_len + 2) / 3) * 4;
+  size_t max_encoded_size = base64_chars + (base64_chars / 72) + 4;
+  encoded_data.resize(max_encoded_size);
+
+  base64_encodestate state;
+  base64_init_encodestate(&state);
+
+  size_t encoded_len = base64_encode_block(
+      input, input_len, &encoded_data[0], &state);
+  encoded_len += base64_encode_blockend(&encoded_data[0] + encoded_len, &state);
+
+  // Remove any trailing newlines added by libb64
+  while (encoded_len > 0 &&
+         (encoded_data[encoded_len - 1] == '\n' ||
+          encoded_data[encoded_len - 1] == '\r')) {
+    encoded_len--;
+  }
+  encoded_data.resize(encoded_len);
 
   return nullptr;
 }

@@ -324,5 +324,115 @@ class VertexAiTest(tu.TestResultCollector):
         )
 
 
+    # =====================================================================
+    # KServe V1 Protocol Tests
+    # =====================================================================
+
+    def test_v1_predict(self):
+        """V1 format: {"instances": [...]} -> {"predictions": [...]}"""
+        request_body = {
+            "instances": [
+                {
+                    "INPUT0": self.input_data_,
+                    "INPUT1": self.input_data_,
+                }
+            ]
+        }
+
+        import json
+
+        headers = {"Content-Type": "application/json"}
+        r = requests.post(
+            self.url_, data=json.dumps(request_body), headers=headers
+        )
+        r.raise_for_status()
+
+        result = r.json()
+        self.assertIn("predictions", result)
+        self.assertEqual(len(result["predictions"]), 1)
+
+        prediction = result["predictions"][0]
+        self.assertIn("OUTPUT0", prediction)
+        self.assertIn("OUTPUT1", prediction)
+
+        for i in range(16):
+            self.assertEqual(prediction["OUTPUT0"][i], self.expected_output0_data_[i])
+            self.assertEqual(prediction["OUTPUT1"][i], self.expected_output1_data_[i])
+
+    def test_v1_predict_with_parameters(self):
+        """V1 format with top-level parameters passthrough"""
+        import json
+
+        request_body = {
+            "instances": [
+                {
+                    "INPUT0": self.input_data_,
+                    "INPUT1": self.input_data_,
+                }
+            ],
+            "parameters": {},
+        }
+
+        headers = {"Content-Type": "application/json"}
+        r = requests.post(
+            self.url_, data=json.dumps(request_body), headers=headers
+        )
+        r.raise_for_status()
+
+        result = r.json()
+        self.assertIn("predictions", result)
+        prediction = result["predictions"][0]
+        for i in range(16):
+            self.assertEqual(prediction["OUTPUT0"][i], self.expected_output0_data_[i])
+            self.assertEqual(prediction["OUTPUT1"][i], self.expected_output1_data_[i])
+
+    def test_v2_predict_backward_compat(self):
+        """V2 format still works (backward compatibility regression test)"""
+        inputs = []
+        outputs = []
+        inputs.append(httpclient.InferInput("INPUT0", [1, 16], "INT32"))
+        inputs.append(httpclient.InferInput("INPUT1", [1, 16], "INT32"))
+
+        input_data = np.array(self.input_data_, dtype=np.int32)
+        input_data = np.expand_dims(input_data, axis=0)
+        inputs[0].set_data_from_numpy(input_data, binary_data=False)
+        inputs[1].set_data_from_numpy(input_data, binary_data=False)
+
+        outputs.append(httpclient.InferRequestedOutput("OUTPUT0", binary_data=False))
+        outputs.append(httpclient.InferRequestedOutput("OUTPUT1", binary_data=False))
+        request_body, _ = httpclient.InferenceServerClient.generate_request_body(
+            inputs, outputs=outputs
+        )
+
+        headers = {"Content-Type": "application/json"}
+        r = requests.post(self.url_, data=request_body, headers=headers)
+        r.raise_for_status()
+
+        result = httpclient.InferenceServerClient.parse_response_body(r._content)
+        output0_data = result.as_numpy("OUTPUT0")
+        output1_data = result.as_numpy("OUTPUT1")
+        for i in range(16):
+            self.assertEqual(output0_data[0][i], self.expected_output0_data_[i])
+            self.assertEqual(output1_data[0][i], self.expected_output1_data_[i])
+
+    def test_v1_predict_empty_instances(self):
+        """V1 format with empty instances should return an error"""
+        import json
+
+        request_body = {"instances": []}
+
+        headers = {"Content-Type": "application/json"}
+        r = requests.post(
+            self.url_, data=json.dumps(request_body), headers=headers
+        )
+        self.assertEqual(
+            400,
+            r.status_code,
+            "Expected error code 400 for empty instances; got: {}".format(
+                r.status_code
+            ),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

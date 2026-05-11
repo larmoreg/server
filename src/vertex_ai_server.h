@@ -53,6 +53,9 @@ class VertexAiAPIServer : public HTTPAPIServer {
 
   void Handle(evhtp_request_t* req) override;
 
+  // Auto-detect V1 (instances) vs V2 (inputs) format and route accordingly
+  void HandleVertexAiPredict(evhtp_request_t* req);
+
   void HandleMetrics(evhtp_request_t* req);
 
   TRITONSERVER_Error* GetInferenceHeaderLength(
