@@ -25,7 +25,10 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "vertex_ai_server.h"
 
+#include <algorithm>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "common.h"
 
@@ -120,8 +123,8 @@ VertexAiAPIServer::Handle(evhtp_request_t* req)
     const char* redirect_c_str =
         evhtp_kv_find(req->headers_in, redirect_header_.c_str());
     if (redirect_c_str == nullptr) {
-      // Infer the default model
-      HandleInfer(req, model_name_, model_version_str_);
+      // Auto-detect V1 vs V2 format and route accordingly
+      HandleVertexAiPredict(req);
       return;
     } else {
       // Endpoint redirection is requested
@@ -239,6 +242,54 @@ VertexAiAPIServer::Handle(evhtp_request_t* req)
                  << static_cast<int>(EVHTP_RES_BADREQ);
 
   evhtp_send_reply(req, EVHTP_RES_BADREQ);
+}
+
+void
+VertexAiAPIServer::HandleVertexAiPredict(evhtp_request_t* req)
+{
+  if (req->method != htp_method_POST) {
+    evhtp_send_reply(req, EVHTP_RES_METHNALLOWED);
+    return;
+  }
+
+  // Non-destructive peek at the request body to detect V1 vs V2 format.
+  // evbuffer_copyout copies without draining, so HandleInfer/HandleV1Infer
+  // can still read the full body.
+  //
+  // V1 requests have "instances" as a top-level JSON key.
+  // V2 requests have "inputs" as a top-level JSON key.
+  // We parse the full body as JSON and check for the key to avoid false
+  // positives from substring matching (e.g. "instances" appearing inside
+  // a data value).
+  evbuffer* input_buffer = req->buffer_in;
+  size_t buffer_len = evbuffer_get_length(input_buffer);
+
+  bool is_v1 = false;
+  if (buffer_len > 0) {
+    std::vector<char> body_buf(buffer_len);
+    ev_ssize_t copied =
+        evbuffer_copyout(input_buffer, body_buf.data(), buffer_len);
+    if (copied > 0) {
+      triton::common::TritonJson::Value body_json;
+      auto parse_err = body_json.Parse(body_buf.data(), copied);
+      if (parse_err == nullptr) {
+        triton::common::TritonJson::Value dummy;
+        is_v1 = body_json.Find("instances", &dummy);
+      } else {
+        TRITONSERVER_ErrorDelete(parse_err);
+      }
+    }
+  }
+
+  if (is_v1) {
+    LOG_VERBOSE(1) << "Vertex AI: detected V1 (instances) format, routing to "
+                      "HandleV1Infer";
+    HandleV1Infer(req, model_name_, model_version_str_);
+  } else {
+    LOG_VERBOSE(1) << "Vertex AI: detected V2 (inputs) format, routing to "
+                      "HandleInfer";
+    HandleInfer(req, model_name_, model_version_str_);
+  }
 }
 
 void
